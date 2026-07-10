@@ -134,4 +134,47 @@
       <url>${env.CI_API_V4_URL}/projects/${env.CI_PROJECT_ID}/packages/maven</url>
     </snapshotRepository>
   </distributionManagement>
+
+  <profiles>
+    <!-- Publishes a release to Maven Central (central.sonatype.com). Activated
+         explicitly: mvn -Pcentral-release deploy. Requires the release signing
+         key in the local GPG keyring, MAVEN_GPG_PASSPHRASE in the environment,
+         and a `central` server entry (portal user token) in settings.xml.
+         See RELEASING.md. -->
+    <profile>
+      <id>central-release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <configuration>
+              <!-- Non-interactive signing: passphrase only via MAVEN_GPG_PASSPHRASE -->
+              <bestPractices>true</bestPractices>
+            </configuration>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <!-- Upload + validate only; publishing is confirmed by a human in
+                   the Central portal UI. -->
+              <autoPublish>false</autoPublish>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

@@ -40,3 +40,22 @@ publish:
     - if: '$CI_COMMIT_BRANCH == "main"'
   script:
     - mvn $MAVEN_CLI_OPTS deploy -DskipTests -s ci_settings.xml
+
+# Uploads a signed release to Maven Central (central.sonatype.com). Manual, on
+# release tags only. The deployment stops in the portal's VALIDATED state
+# (autoPublish=false) — publishing is confirmed by a human in the portal UI.
+# Required CI/CD variables: GPG_PRIVATE_KEY_B64, GPG_PASSPHRASE,
+# CENTRAL_TOKEN_USERNAME, CENTRAL_TOKEN_PASSWORD. See RELEASING.md.
+publish-central:
+  stage: publish
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]/'
+      when: manual
+  script:
+    # The tag must match the pom version (guards against releasing a SNAPSHOT).
+    - V=$(mvn -q $MAVEN_CLI_OPTS help:evaluate -Dexpression=project.version -DforceStdout)
+    - test "v$V" = "$CI_COMMIT_TAG" || { echo "pom version $V does not match tag $CI_COMMIT_TAG"; exit 1; }
+    - command -v gpg >/dev/null || { apt-get update -qq && apt-get install -y -qq gnupg; }
+    - echo "$GPG_PRIVATE_KEY_B64" | base64 -d | gpg --batch --import
+    - export MAVEN_GPG_PASSPHRASE="$GPG_PASSPHRASE"
+    - mvn $MAVEN_CLI_OPTS -Pcentral-release deploy -DskipTests -s ci_settings.xml
