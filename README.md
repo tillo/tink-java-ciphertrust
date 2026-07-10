@@ -32,7 +32,7 @@ import com.google.crypto.tink.Aead;
 
 String keyUri = "ciphertrust://cm.example.com/my-kek";
 Aead kek = CipherTrustKmsClient
-    .create(keyUri, CipherTrustCredentials.usernamePassword("svc-tink", password))
+    .create(keyUri, CipherTrustCredentials.usernamePassword("tink-service", password))
     .getAead(keyUri);
 ```
 
@@ -159,7 +159,7 @@ Live integration tests are enabled automatically when the environment defines:
 
 ```
 CIPHERTRUST_TEST_KEY_URI=ciphertrust://cm.example.com/my-test-kek
-CIPHERTRUST_USERNAME=svc-tink
+CIPHERTRUST_USERNAME=tink-service
 CIPHERTRUST_PASSWORD=...          # or CIPHERTRUST_REFRESH_TOKEN=...
 ```
 

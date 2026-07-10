@@ -36,7 +36,7 @@ import java.util.Optional;
  *
  * <pre>{@code
  * KmsClient client = CipherTrustKmsClient.create(
- *     CipherTrustCredentials.usernamePassword("svc-tink", password));
+ *     CipherTrustCredentials.usernamePassword("tink-service", password));
  * Aead kek = client.getAead("ciphertrust://cm.example.com/my-kek");
  * }</pre>
  *
