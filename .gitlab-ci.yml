@@ -1,0 +1,42 @@
+include:
+  - project: mdapi/ci-templates
+    file: /secret-scan.yml
+    ref: main
+
+stages:
+  - test
+  - publish
+
+# Instantiate the hidden .secret-scan job from the included template (runs gitleaks in stage .pre).
+secret-scan:
+  extends: .secret-scan
+
+variables:
+  MAVEN_OPTS: -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository
+  MAVEN_CLI_OPTS: -B --no-transfer-progress
+
+default:
+  image: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/library/maven:3.9-eclipse-temurin-21
+  tags:
+    - mdapi
+  cache:
+    key: m2-$CI_COMMIT_REF_SLUG
+    paths:
+      - .m2/repository
+
+# Unit tests always run. When the project defines the CIPHERTRUST_* CI/CD
+# variables (CIPHERTRUST_TEST_KEY_URI + CIPHERTRUST_USERNAME/CIPHERTRUST_PASSWORD),
+# the live integration tests against the real CipherTrust Manager are
+# automatically enabled by their @EnabledIfEnvironmentVariable condition.
+test:
+  stage: test
+  script:
+    - mvn $MAVEN_CLI_OPTS verify
+
+# Publishes the jar (+sources/javadoc) to this project's GitLab Maven registry.
+publish:
+  stage: publish
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - mvn $MAVEN_CLI_OPTS deploy -DskipTests -s ci_settings.xml
