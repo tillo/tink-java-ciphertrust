@@ -14,7 +14,17 @@
     Google Tink KmsClient/Aead implementation backed by the Thales CipherTrust
     Manager REST API (/api/v1), using AES-GCM with associated data.
   </description>
-  <url>https://gitlab.mdapi.ch/mdapi/tink-java-ciphertrust</url>
+  <!-- The public home of this artifact. Development happens on a private GitLab that pushes a
+       mirror to GitHub; all internal plumbing (CI, Maven registry) is env-based, so the pom
+       carries only the public identity and stays identical on both hosts. -->
+  <url>https://github.com/tillo/tink-java-ciphertrust</url>
+
+  <scm>
+    <connection>scm:git:https://github.com/tillo/tink-java-ciphertrust.git</connection>
+    <developerConnection>scm:git:git@github.com:tillo/tink-java-ciphertrust.git</developerConnection>
+    <url>https://github.com/tillo/tink-java-ciphertrust</url>
+    <tag>HEAD</tag>
+  </scm>
 
   <licenses>
     <license>
