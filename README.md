@@ -91,6 +91,32 @@ decrypted, even when the same credentials can access that other key.
 Associated data is forwarded to CipherTrust's `aad` field and enforced by the
 server-side GCM operation.
 
+## Timeouts and retries
+
+Every operation is bounded in time. The defaults (10 s connect, 30 s per HTTP
+exchange, 3 attempts with exponential backoff starting at 300 ms) can be tuned
+with `CipherTrustTransport`:
+
+```java
+CipherTrustKmsClient client = CipherTrustKmsClient.create(keyUri, credentials)
+    .withTransport(CipherTrustTransport.of(
+        Duration.ofSeconds(5),    // connect timeout
+        Duration.ofSeconds(15),   // request timeout
+        3,                        // attempts (1 = no retries)
+        Duration.ofMillis(300))); // initial backoff, doubled per retry
+```
+
+Only transient transport failures are retried: I/O errors and HTTP
+502/503/504 (a CipherTrust node restarting behind its front-end).
+Deterministic answers — bad credentials, unknown key, AAD mismatch, any other
+4xx and 500 — fail immediately. All operations this library issues are safe to
+repeat, so retries never duplicate effects.
+
+An unreachable CipherTrust Manager therefore surfaces as a
+`GeneralSecurityException` within roughly `attempts x (connect + request
+timeout) + backoff` — never as an indefinite hang. This matters when the first
+call sits on an application's boot path, e.g. unwrapping a vault keyset.
+
 ## Private-CA / custom TLS
 
 If the CipherTrust Manager presents a certificate from a private CA, supply a
