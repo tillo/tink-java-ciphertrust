@@ -6,7 +6,7 @@
 
   <groupId>ch.tillo.tink</groupId>
   <artifactId>tink-ciphertrust</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.2.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>Tink CipherTrust Manager Extension</name>

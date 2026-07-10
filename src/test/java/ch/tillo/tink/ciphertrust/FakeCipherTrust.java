@@ -55,8 +55,15 @@ final class FakeCipherTrust implements AutoCloseable {
   private final Map<String, FakeKey> keysById = new ConcurrentHashMap<>();
   private final Map<String, Long> validTokens = new ConcurrentHashMap<>();
   private final AtomicInteger authCalls = new AtomicInteger();
+  private final AtomicInteger cryptoCalls = new AtomicInteger();
+  // Transient-failure injection for retry tests: the next N crypto calls answer with this
+  // status before any other processing (mimicking a CM node restarting behind its front-end).
+  private final AtomicInteger failNextCryptoCount = new AtomicInteger();
 
   volatile long tokenDurationSeconds = 300;
+  volatile int failNextCryptoStatus = 503;
+  /** The next crypto call stalls this long before answering (for request-timeout tests). */
+  volatile long stallNextCryptoMs = 0;
 
   private static final class FakeKey {
     final String name;
@@ -82,6 +89,15 @@ final class FakeCipherTrust implements AutoCloseable {
 
   int authCalls() {
     return authCalls.get();
+  }
+
+  int cryptoCalls() {
+    return cryptoCalls.get();
+  }
+
+  /** Makes the next {@code count} crypto calls fail with {@link #failNextCryptoStatus}. */
+  void failNextCrypto(int count) {
+    failNextCryptoCount.set(count);
   }
 
   void revokeAllTokens() {
@@ -141,6 +157,20 @@ final class FakeCipherTrust implements AutoCloseable {
   }
 
   private void handleCrypto(HttpExchange exchange, boolean encrypt) throws IOException {
+    cryptoCalls.incrementAndGet();
+    long stall = stallNextCryptoMs;
+    if (stall > 0) {
+      stallNextCryptoMs = 0;
+      try {
+        Thread.sleep(stall);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    if (failNextCryptoCount.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+      sendError(exchange, failNextCryptoStatus, 0, "injected transient failure");
+      return;
+    }
     // Live CM rejects crypto calls without an Accept header.
     if (exchange.getRequestHeaders().getFirst("Accept") == null) {
       sendError(exchange, 400, 15, "NCERRBadRequest: Accept header is invalid.");

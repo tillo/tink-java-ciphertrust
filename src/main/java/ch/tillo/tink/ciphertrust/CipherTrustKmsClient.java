@@ -22,7 +22,6 @@ import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
-import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -49,10 +48,9 @@ public final class CipherTrustKmsClient implements KmsClient {
   /** The scheme prefix of CipherTrust key URIs. */
   public static final String PREFIX = "ciphertrust://";
 
-  private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
-
   private final String boundKeyUri;
   private CipherTrustCredentials credentials;
+  private CipherTrustTransport transport = CipherTrustTransport.DEFAULT;
   private String urlScheme = "https";
   // Shared across every Aead produced by this client (JDK HttpClient is thread-safe); lazily
   // created so that repeated getAead() calls do not each spawn selector threads + a socket pool.
@@ -130,12 +128,28 @@ public final class CipherTrustKmsClient implements KmsClient {
    * Supplies the {@link HttpClient} used for all CipherTrust calls — e.g. one configured with a
    * custom {@code SSLContext} to trust a private-CA CipherTrust Manager certificate. If not set, a
    * default client is created lazily and shared across every {@link Aead} this client produces.
+   *
+   * <p>A supplied client keeps its own connect timeout; the request timeout and retry policy from
+   * {@link #withTransport} still apply.
    */
   public CipherTrustKmsClient withHttpClient(HttpClient httpClient) {
     if (httpClient == null) {
       throw new IllegalArgumentException("httpClient must not be null");
     }
     this.httpClient = httpClient;
+    return this;
+  }
+
+  /**
+   * Overrides the default timeouts and retry policy ({@link CipherTrustTransport#DEFAULT}) for
+   * every {@link Aead} this client produces. Must be called before the first {@link #getAead} if a
+   * custom connect timeout is wanted, since the shared {@code HttpClient} is created on first use.
+   */
+  public CipherTrustKmsClient withTransport(CipherTrustTransport transport) {
+    if (transport == null) {
+      throw new IllegalArgumentException("transport must not be null");
+    }
+    this.transport = transport;
     return this;
   }
 
@@ -154,12 +168,13 @@ public final class CipherTrustKmsClient implements KmsClient {
     String baseUrl =
         urlScheme + "://" + parts.host + (parts.port > 0 ? ":" + parts.port : "");
     return new CipherTrustAead(
-        new CipherTrustRestClient(baseUrl, credentials, sharedHttpClient()), parts.keyName);
+        new CipherTrustRestClient(baseUrl, credentials, transport, sharedHttpClient()),
+        parts.keyName);
   }
 
   private synchronized HttpClient sharedHttpClient() {
     if (httpClient == null) {
-      httpClient = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
+      httpClient = HttpClient.newBuilder().connectTimeout(transport.connectTimeout()).build();
     }
     return httpClient;
   }

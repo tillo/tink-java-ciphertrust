@@ -25,7 +25,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.time.Duration;
 import java.util.Base64;
 
 /**
@@ -37,27 +36,43 @@ import java.util.Base64;
  * re-authenticates ahead of expiry, plus once reactively if the server answers 401 (e.g. after a
  * server-side revocation). Concurrent callers that all observe the same expiry/401 collapse to a
  * single re-authentication.
+ *
+ * <p><b>Failure semantics.</b> Every call is bounded: connections respect the client's connect
+ * timeout, each HTTP exchange respects {@link CipherTrustTransport#requestTimeout()}, and
+ * transient transport failures (I/O errors and HTTP 502/503/504 — a CipherTrust node restarting
+ * behind its front-end) are retried up to {@link CipherTrustTransport#attempts()} times with
+ * exponential backoff. Everything else (4xx, 500, malformed bodies) fails immediately: those
+ * are deterministic answers, and all crypto operations here are pure, so retrying them can only
+ * add latency. The worst-case wall time of one operation is therefore roughly {@code attempts ×
+ * (connect timeout + request timeout) + total backoff} — callers on a boot path (e.g. unwrapping a
+ * vault keyset) get a clear exception within that envelope instead of a hang.
  */
 final class CipherTrustRestClient {
 
-  private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
-  private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
   /** Renew the cached JWT this long before its nominal expiry. */
   private static final long EXPIRY_SAFETY_MARGIN_MS = 30_000;
 
   private final String baseUrl;
   private final CipherTrustCredentials credentials;
+  private final CipherTrustTransport transport;
   private final HttpClient http;
 
   private final Object tokenLock = new Object();
   private String jwt;
   private long jwtExpiresAtMs;
 
-  CipherTrustRestClient(String baseUrl, CipherTrustCredentials credentials, HttpClient http) {
+  CipherTrustRestClient(
+      String baseUrl,
+      CipherTrustCredentials credentials,
+      CipherTrustTransport transport,
+      HttpClient http) {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     this.credentials = credentials;
+    this.transport = transport;
     this.http =
-        http != null ? http : HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
+        http != null
+            ? http
+            : HttpClient.newBuilder().connectTimeout(transport.connectTimeout()).build();
   }
 
   /** Result of a {@code crypto/encrypt} call; all payload fields are base64 strings as returned. */
@@ -211,11 +226,21 @@ final class CipherTrustRestClient {
     return jwt;
   }
 
+  /**
+   * Sends one POST, retrying transient transport failures per the configured {@link
+   * CipherTrustTransport}. Retryable: {@link IOException} (connect refused/timed out, reset,
+   * response timeout) and HTTP 502/503/504. Anything else — including 401, other 4xx and 500 — is
+   * returned to the caller unchanged: protocol-level handling (the single 401 re-auth) lives in
+   * {@link #postAuthorized}, and deterministic errors must not be amplified by retries.
+   *
+   * <p>All requests this client issues (token grant, encrypt, decrypt) are safe to repeat: a
+   * duplicate token grant just mints another short-lived JWT, and the crypto operations are pure.
+   */
   private HttpResponse<String> send(String path, JsonObject body, String bearer)
       throws GeneralSecurityException {
     HttpRequest.Builder request =
         HttpRequest.newBuilder(URI.create(baseUrl + path))
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(transport.requestTimeout())
             .header("Content-Type", "application/json")
             // CipherTrust's crypto endpoints reject requests without an Accept header.
             .header("Accept", "application/json")
@@ -223,13 +248,51 @@ final class CipherTrustRestClient {
     if (bearer != null) {
       request.header("Authorization", "Bearer " + bearer);
     }
+    HttpRequest built = request.build();
+
+    IOException lastFailure = null;
+    for (int attempt = 1; attempt <= transport.attempts(); attempt++) {
+      if (attempt > 1) {
+        sleepBackoff(attempt, path);
+      }
+      try {
+        HttpResponse<String> response = http.send(built, HttpResponse.BodyHandlers.ofString());
+        int status = response.statusCode();
+        if ((status == 502 || status == 503 || status == 504) && attempt < transport.attempts()) {
+          lastFailure = null;
+          continue;
+        }
+        return response;
+      } catch (IOException e) {
+        lastFailure = e;
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new GeneralSecurityException("CipherTrust request to " + path + " interrupted", e);
+      }
+    }
+    if (lastFailure != null) {
+      throw new GeneralSecurityException(
+          "CipherTrust request to " + baseUrl + path + " failed after " + transport.attempts()
+              + " attempt(s)",
+          lastFailure);
+    }
+    // Retries exhausted on a 502/503/504 without a fresh response in hand only happens when the
+    // last attempt also gated on `attempt < attempts()`, which it never does — but keep a
+    // defensive throw so a future refactor cannot fall through silently.
+    throw new GeneralSecurityException(
+        "CipherTrust request to " + baseUrl + path + " failed after " + transport.attempts()
+            + " attempt(s)");
+  }
+
+  /** Exponential backoff before retry number {@code attempt} (2, 3, ...). */
+  private void sleepBackoff(int attempt, String path) throws GeneralSecurityException {
+    long delayMs = transport.initialBackoff().toMillis() * (1L << (attempt - 2));
     try {
-      return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-    } catch (IOException e) {
-      throw new GeneralSecurityException("CipherTrust request to " + path + " failed", e);
+      Thread.sleep(delayMs);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new GeneralSecurityException("CipherTrust request to " + path + " interrupted", e);
+      throw new GeneralSecurityException(
+          "CipherTrust request to " + path + " interrupted during retry backoff", e);
     }
   }
 
