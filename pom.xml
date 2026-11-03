@@ -49,7 +49,7 @@
     <!-- Compile against the oldest tink the extension must run with (Horizon 2.10.x
          bundles 1.21.0). The KmsClient/Aead surface is stable since 1.0.0, so the
          artifact runs fine against newer cores. -->
-    <tink.version>1.21.0</tink.version>
+    <tink.version>1.24.0</tink.version>
   </properties>
 
   <dependencies>
